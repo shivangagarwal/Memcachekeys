@@ -1,7 +1,7 @@
-import re, telnetlib, sys
+import re, telnetlib, sys, threading
 
 class MemCacheKeys:
-    _telnet = None
+    _outlist = []
     _key_regex = re.compile(ur'ITEM (.*) \[(.*); (.*)\]')
     _slab_regex = re.compile(ur'STAT items:(.*):number')
 
@@ -13,34 +13,42 @@ class MemCacheKeys:
     def telnet(self, host, port):
 	return telnetlib.Telnet(host, port)
 
-    def command(self,cmd):
+    def command(self,telnet, cmd):
 	"""
 	Runs the command on the telnet connected
 	"""
-	self._telnet.write("%s\n" %cmd)
-	return self._telnet.read_until('END')
-
+	telnet.write("%s\n" %cmd)
+	return telnet.read_until('END')
 
     def get_all_keys(self):
 	"""Function which connects to telnet and gets the keys"""
-	keys = []
-	for x in self._memservers:
-	    self._telnet = self.telnet(x['host'], x['port'])
-	    keys = keys + self._get_keys()
-	return keys
-
-    def _get_keys(self):
+	threads = []
+	threads = [self._get_threads(x['host'], x['port']) for x in self._memservers]
+	for t in threads:
+	    t.start()
+	for t in threads:
+	    t.join()
+	return self._outlist
+    
+    def _get_keys(self, host, port):
 	"""Connects to one server and gets the keys of that particular servers
 	"""
+	_telnet = self.telnet(host, port)
 	cmd = 'stats cachedump %s 0'
-	keys = [key for id in self._slab_ids() for key in self._key_regex.findall(self.command(cmd %id))]
-	return [key[0] for key in keys]
+	keys = [key for id in self._slab_ids(_telnet) for key in self._key_regex.findall(self.command(_telnet, cmd %id))]
+	result =  [key[0] for key in keys]
+	self._outlist = self._outlist + result
 
-    def _slab_ids(self):
+    def _get_threads(self, host, port):
+	result = []
+	thread = threading.Thread(target= self._get_keys, args=(host, port))
+	return thread
+
+    def _slab_ids(self, telnet):
 	"""
 	Gets all the slab_ids
 	"""
-	return self._slab_regex.findall(self.command('stats items'))
+	return self._slab_regex.findall(self.command(telnet, 'stats items'))
 
 
 if __name__ == '__main__':
